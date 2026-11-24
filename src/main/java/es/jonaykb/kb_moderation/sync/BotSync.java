@@ -20,18 +20,22 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.WebSocket;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletionStage;
 
 /**
  * Keeps sanctions and reports in step with KB Discord Bot.
  * <ul>
  *   <li>Out: every sanction and report made here goes to the bot, in order, through a queue saved with the data
  *   (nothing is lost if the bot is down; retries are idempotent on the bot side by {@code ref}).</li>
- *   <li>In: every few seconds the server asks the bot for what happened since its cursor (sanctions from the panel or
- *   made by hand in Discord, sanctions from other servers, removed cases, reports closed in the panel) and applies it.</li>
+ *   <li>In: the server reads what happened in the bot since its cursor (sanctions from the panel or made by hand in
+ *   Discord, sanctions from other servers, removed cases, reports closed in the panel) and applies it. It reads it once
+ *   when it connects and then only when the bot says there is something new, through a WebSocket. Only while the
+ *   WebSocket is down (bot restarting, or an older bot without it) does it ask every {@code pollSeconds} instead.</li>
  * </ul>
  * HTTP runs off the server thread; everything that touches game data goes back to it with {@code server.execute}.
  */
@@ -42,7 +46,16 @@ public final class BotSync {
 
     private static boolean sending;
     private static boolean polling;
+    /** The bot announced something new while a read was in flight: read again when it ends. */
+    private static boolean readAgain;
     private static long nextPoll;
+
+    private static WebSocket socket;
+    private static boolean connecting;
+    private static long nextConnect;
+    private static long socketFailures;
+    /** Last frame from the bot (it pings every 30 s): if it goes quiet the connection is dead even if nothing said so. */
+    private static volatile long socketSeen;
     private static long nextProblemLog;
     private static String lastProblem;
 
@@ -163,10 +176,100 @@ public final class BotSync {
     /** Called once a second on the server thread. */
     public static void tick(MinecraftServer server) {
         Endpoint ep = endpoint();
-        if (ep == null || !ModData.loaded()) return;
+        if (ep == null || !ModData.loaded()) {
+            if (socket != null) dropSocket("sync turned off");
+            return;
+        }
         long now = System.currentTimeMillis();
         if (!sending) sendNext(server, ep, now);
+        if (socket != null && now - socketSeen > 75_000L) dropSocket("no ping from the bot in 75 s");
+        if (socket == null && !connecting && now >= nextConnect) connect(server, ep);
         if (!polling && now >= nextPoll) poll(server, ep);
+    }
+
+    // ───────────────────────────── in: WebSocket ─────────────────────────────
+
+    private static void connect(MinecraftServer server, Endpoint ep) {
+        connecting = true;
+        URI uri = URI.create(ep.base().replaceFirst("^http", "ws") + "/ws");
+        WebSocket.Listener listener = new WebSocket.Listener() {
+            @Override
+            public void onOpen(WebSocket ws) {
+                socketSeen = System.currentTimeMillis();
+                ws.request(1);
+            }
+
+            @Override
+            public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
+                socketSeen = System.currentTimeMillis();
+                if (last) server.execute(BotSync::readSoon);
+                ws.request(1);
+                return null;
+            }
+
+            @Override
+            public CompletionStage<?> onPing(WebSocket ws, java.nio.ByteBuffer message) {
+                socketSeen = System.currentTimeMillis();
+                ws.request(1);
+                return null; // the pong goes out on its own
+            }
+
+            @Override
+            public CompletionStage<?> onClose(WebSocket ws, int statusCode, String reason) {
+                server.execute(() -> {
+                    if (socket == ws) dropSocket("closed by the bot (" + statusCode + ")");
+                });
+                return null;
+            }
+
+            @Override
+            public void onError(WebSocket ws, Throwable error) {
+                server.execute(() -> {
+                    if (socket == ws) dropSocket(error.toString());
+                });
+            }
+        };
+        HTTP.newWebSocketBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .header("Authorization", "Bearer " + ep.key())
+                .header("User-Agent", "kb_moderation")
+                .buildAsync(uri, listener)
+                .whenComplete((ws, err) -> server.execute(() -> {
+                    connecting = false;
+                    if (err != null) {
+                        // Back off: 5 s, 10 s… up to 5 min. Meanwhile the feed is read every pollSeconds.
+                        socketFailures++;
+                        nextConnect = System.currentTimeMillis() + Math.min(300_000L, 5_000L * (1L << Math.min(6, socketFailures - 1)));
+                        if (nextPoll == Long.MAX_VALUE) nextPoll = 0;
+                        problem("WebSocket: " + (err.getCause() != null ? err.getCause() : err));
+                        return;
+                    }
+                    if (!ModData.loaded() || endpoint() == null) {
+                        ws.abort();
+                        return;
+                    }
+                    socket = ws;
+                    socketFailures = 0;
+                    socketSeen = System.currentTimeMillis();
+                    LOGGER.info("KB Discord Bot: connected, changes now arrive as they happen");
+                    // Catch up with whatever happened while disconnected; after that, only when the bot says so.
+                    readSoon();
+                }));
+    }
+
+    /** The bot has something new (or we just connected): read the feed now. */
+    private static void readSoon() {
+        if (polling) readAgain = true;
+        else nextPoll = 0;
+    }
+
+    private static void dropSocket(String why) {
+        WebSocket ws = socket;
+        socket = null;
+        if (ws != null) ws.abort();
+        nextConnect = System.currentTimeMillis() + 5_000L;
+        if (nextPoll == Long.MAX_VALUE) nextPoll = 0;
+        problem("WebSocket: " + why);
     }
 
     private static void sendNext(MinecraftServer server, Endpoint ep, long now) {
@@ -231,7 +334,12 @@ public final class BotSync {
                 .build();
         HTTP.sendAsync(req, HttpResponse.BodyHandlers.ofString()).whenComplete((res, err) -> server.execute(() -> {
             polling = false;
-            nextPoll = System.currentTimeMillis() + ModConfig.BOT_POLL_SECONDS.get() * 1000L;
+            // With the WebSocket up there is nothing to ask until the bot says so; without it, ask every pollSeconds.
+            nextPoll = socket != null ? Long.MAX_VALUE : System.currentTimeMillis() + ModConfig.BOT_POLL_SECONDS.get() * 1000L;
+            if (readAgain) {
+                readAgain = false;
+                nextPoll = 0;
+            }
             if (!ModData.loaded()) return;
             if (err != null || res.statusCode() != 200) {
                 nextPoll = System.currentTimeMillis() + 30_000L;
@@ -286,6 +394,12 @@ public final class BotSync {
     public static void reset() {
         sending = false;
         polling = false;
+        readAgain = false;
         nextPoll = 0;
+        if (socket != null) socket.abort();
+        socket = null;
+        connecting = false;
+        nextConnect = 0;
+        socketFailures = 0;
     }
 }

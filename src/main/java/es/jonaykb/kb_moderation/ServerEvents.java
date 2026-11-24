@@ -59,6 +59,7 @@ public final class ServerEvents {
     public void onStopped(ServerStoppedEvent e) {
         ModData.unload();
         BotSync.reset();
+        Net.reset();
         discordChecked.clear();
     }
 
@@ -113,6 +114,7 @@ public final class ServerEvents {
         if (++ticks % 20 != 0) return;
         VoiceMute.refresh(server);
         BotSync.tick(server);
+        Net.pushPanels(server);
         for (ServerPlayer p : List.copyOf(server.getPlayerList().getPlayers())) {
             // An account linked for the first time just now: check its Discord account against bans.
             if (!discordChecked.contains(p.getUUID())) {

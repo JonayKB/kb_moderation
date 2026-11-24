@@ -160,7 +160,6 @@ public final class SanctionScreen extends Screen {
         if (kind != Kind.BAN) Sounds.confirm();
         minecraft.getToasts().addToast(new ModToast(kind == Kind.WARN ? 2 : 3, (kind == Kind.NOTE ? "Nota" : kind.verb) + ": " + target,
                 (kind.timed ? label(duration) + " · " : "") + (r.isEmpty() ? "Sin motivo" : r)));
-        parent.refreshSoon();
         minecraft.setScreen(parent);
     }
 

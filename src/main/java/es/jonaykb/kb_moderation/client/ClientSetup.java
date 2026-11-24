@@ -9,7 +9,6 @@ import net.minecraft.client.gui.screens.MenuScreens;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import es.jonaykb.kb_moderation.client.gui.ReportScreen;
 import es.jonaykb.kb_moderation.network.Net;
-import es.jonaykb.kb_moderation.network.Packets;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
@@ -57,7 +56,6 @@ public final class ClientSetup {
         while (OPEN_PANEL.consumeClick()) {
             if (ClientState.isStaff() && mc.screen == null) {
                 mc.setScreen(new PanelScreen(null));
-                Net.CHANNEL.sendToServer(new Packets.RequestPanel());
             }
         }
         while (OPEN_REPORT.consumeClick()) {

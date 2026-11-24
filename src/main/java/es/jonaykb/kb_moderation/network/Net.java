@@ -39,13 +39,15 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 public final class Net {
-    private static final String VERSION = "1";
+    private static final String VERSION = "2";
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(KbModeration.MOD_ID, "main"), () -> VERSION, VERSION::equals, VERSION::equals);
 
     /** Last StaffState sent to each player, to only send changes. */
     private static final Map<UUID, Packets.StaffState> lastState = new HashMap<>();
     private static int nextId;
+    /** Staff with the panel open, and the last panel each was sent: only changes are sent again. */
+    private static final Map<UUID, Packets.Panel> panelViewers = new HashMap<>();
 
     private Net() {
     }
@@ -60,7 +62,11 @@ public final class Net {
         toClient(Packets.Vanished.class, Packets.Vanished::write, Packets.Vanished::read, m -> ClientBridge.run(c -> c.vanished(m)));
         toClient(Packets.StaffChatData.class, Packets.StaffChatData::write, Packets.StaffChatData::read, m -> ClientBridge.run(c -> c.staffChat(m)));
 
-        toServer(Packets.RequestPanel.class, Packets.RequestPanel::write, Packets.RequestPanel::read, (m, p) -> sendPanel(p, false));
+        toServer(Packets.RequestPanel.class, Packets.RequestPanel::write, Packets.RequestPanel::read, (m, p) -> {
+            panelViewers.put(p.getUUID(), null);
+            sendPanel(p, false);
+        });
+        toServer(Packets.ClosePanel.class, Packets.ClosePanel::write, Packets.ClosePanel::read, (m, p) -> panelViewers.remove(p.getUUID()));
         toServer(Packets.RequestHistory.class, Packets.RequestHistory::write, Packets.RequestHistory::read, (m, p) -> sendHistory(p, m.name()));
         toServer(Packets.RequestStaffChat.class, Packets.RequestStaffChat::write, Packets.RequestStaffChat::read, (m, p) -> {
             if (Perms.has(p, Perm.STAFFCHAT)) send(p, new Packets.StaffChatData(true, StaffChat.recent()));
@@ -125,6 +131,13 @@ public final class Net {
 
     public static void forget(ServerPlayer p) {
         lastState.remove(p.getUUID());
+        panelViewers.remove(p.getUUID());
+    }
+
+    /** Server stopped. */
+    public static void reset() {
+        lastState.clear();
+        panelViewers.clear();
     }
 
     public static void syncFrozen(ServerPlayer p) {
@@ -147,7 +160,21 @@ public final class Net {
     // ───────────────────────────── panel ─────────────────────────────
 
     public static void openPanel(ServerPlayer p) {
+        panelViewers.put(p.getUUID(), null);
         sendPanel(p, true);
+    }
+
+    /**
+     * Pushes the panel to the staff who have it open, only to those whose view changed (a sanction, someone joining,
+     * a report, health or position of an online player…). Called once a second; costs nothing while nobody has it open.
+     */
+    public static void pushPanels(MinecraftServer server) {
+        if (panelViewers.isEmpty()) return;
+        for (UUID id : List.copyOf(panelViewers.keySet())) {
+            ServerPlayer p = server.getPlayerList().getPlayer(id);
+            if (p == null) panelViewers.remove(id);
+            else sendPanel(p, false);
+        }
     }
 
     private static boolean isStaff(ServerPlayer p) {
@@ -156,7 +183,10 @@ public final class Net {
     }
 
     private static void sendPanel(ServerPlayer viewer, boolean open) {
-        if (!isStaff(viewer)) return;
+        if (!isStaff(viewer)) {
+            panelViewers.remove(viewer.getUUID());
+            return;
+        }
         MinecraftServer server = viewer.server;
         boolean seeVanished = Perms.has(viewer, Perm.VANISH_SEE);
         long now = System.currentTimeMillis();
@@ -187,7 +217,10 @@ public final class Net {
                         r.dimension.replace("minecraft:", "") + " " + r.x + " " + r.y + " " + r.z));
             }
         }
-        send(viewer, new Packets.Panel(open, rows, reports));
+        Packets.Panel panel = new Packets.Panel(open, rows, reports);
+        if (!open && panel.equals(panelViewers.get(viewer.getUUID()))) return;
+        panelViewers.put(viewer.getUUID(), new Packets.Panel(false, rows, reports));
+        send(viewer, panel);
     }
 
     private static Packets.PlayerRow row(UUID uuid, String name, ServerPlayer online, long now) {

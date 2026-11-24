@@ -75,7 +75,7 @@ Sin configurar nada más: usa la misma URL y API key que las estadísticas de KB
 | Desbanear / quitar silencio / quitar aviso | Lo mismo en el bot |
 | `/report` | Reporte en el panel del bot + MD a quien reporta |
 
-Y al revés: lo que se hace en el panel del bot o directamente en Discord (baneos, *timeouts*, avisos, notas, expulsiones, desbaneos, casos borrados, reportes cerrados) se aplica en el juego a todas las cuentas de Minecraft vinculadas a ese Discord. El juego pregunta al bot cada `pollSeconds` (5 s por defecto). Lo que el juego no puede enviar porque el bot no responde se guarda en una cola en `data.json` y se reintenta en orden. El bot no duplica nada aunque reciba un reintento.
+Y al revés: lo que se hace en el panel del bot o directamente en Discord (baneos, *timeouts*, avisos, notas, expulsiones, desbaneos, casos borrados, reportes cerrados) se aplica en el juego a todas las cuentas de Minecraft vinculadas a ese Discord. Llega al momento: el servidor abre un WebSocket con el bot, lee lo pendiente al conectar y después solo cuando el bot avisa de algo nuevo. Mientras el WebSocket está caído (el bot reiniciándose, o una versión del bot sin él) pregunta cada `pollSeconds` (5 s por defecto) y vuelve a conectar solo. Lo que el juego no puede enviar porque el bot no responde se guarda en una cola en `data.json` y se reintenta en orden. El bot no duplica nada aunque reciba un reintento.
 
 La primera vez, el juego importa todo el historial del bot (sin echar ni avisar a nadie por lo antiguo). Solo se comparten las sanciones de jugadores con el Discord vinculado.
 
