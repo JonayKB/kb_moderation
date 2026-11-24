@@ -1,0 +1,113 @@
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+    id 'org.spongepowered.mixin' version '0.7.+'
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+minecraft {
+    mappings channel: mapping_channel, version: mapping_version
+    copyIdeResources = true
+
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            property 'forge.logging.console.level', 'debug'
+            property 'mixin.env.remapRefMap', 'true'
+            property 'mixin.env.refMapRemappingFile', "${projectDir}/build/createSrgToMcp/output.srg"
+
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
+        }
+
+        client {
+            // Separate folder so a dev client and server don't write the same config files.
+            workingDirectory project.file('run-client')
+            // ./gradlew runClient -PmcUser=Staff → offline name for testing against the dev server.
+            args '--width', '854', '--height', '480'
+            if (project.hasProperty('mcUser')) args '--username', project.property('mcUser')
+            // -PmcServer=localhost → join that server straight away.
+            if (project.hasProperty('mcServer')) args '--quickPlayMultiplayer', project.property('mcServer')
+        }
+
+        server {
+            args '--nogui'
+        }
+    }
+}
+
+mixin {
+    add sourceSets.main, "${mod_id}.refmap.json"
+    config "${mod_id}.mixins.json"
+}
+
+repositories {
+    mavenCentral()
+    maven { name = 'Curios'; url = 'https://maven.theillusivec4.top/' }
+    maven { name = 'Simple Voice Chat'; url = 'https://maven.maxhenkel.de/repository/public' }
+    // Optional third-party mods to test against in runClient/runServer: drop <name>-<version>.jar files here.
+    flatDir { dirs 'testenv/compat-mods' }
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
+
+    // Optional integrations: only compiled against, the classes that use them load only when the mod is there.
+    compileOnly fg.deobf("top.theillusivec4.curios:curios-forge:${curios_version}:api")
+    compileOnly "de.maxhenkel.voicechat:voicechat-api:${voicechat_api_version}"
+
+    // ./gradlew runClient -PcompatMods=difficulty_enhancement:0.1,class_enhancement:0.1
+    // Loads those jars from testenv/compat-mods (remapped for the dev environment). Never shipped.
+    if (project.hasProperty('compatMods')) {
+        project.property('compatMods').toString().split(',').each { String mod ->
+            runtimeOnly fg.deobf("local:${mod.trim()}")
+        }
+    }
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    var replaceProperties = [
+            minecraft_version: minecraft_version, minecraft_version_range: minecraft_version_range,
+            forge_version: forge_version, forge_version_range: forge_version_range,
+            loader_version_range: loader_version_range,
+            mod_id: mod_id, mod_name: mod_name, mod_license: mod_license, mod_version: mod_version,
+            mod_authors: mod_authors, mod_description: mod_description,
+    ]
+    inputs.properties replaceProperties
+
+    filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
+        expand replaceProperties + [project: project]
+    }
+}
+
+tasks.named('jar', Jar).configure {
+    manifest {
+        attributes([
+                'Specification-Title'     : mod_id,
+                'Specification-Vendor'    : mod_authors,
+                'Specification-Version'   : '1',
+                'Implementation-Title'    : project.name,
+                'Implementation-Version'  : project.jar.archiveVersion,
+                'Implementation-Vendor'   : mod_authors,
+                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
+        ])
+    }
+    finalizedBy 'reobfJar'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}

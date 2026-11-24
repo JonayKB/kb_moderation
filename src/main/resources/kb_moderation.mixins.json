@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "es.jonaykb.kb_moderation.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "kb_moderation.refmap.json",
+  "mixins": [
+    "ChunkMapAccessor",
+    "TrackedEntityMixin",
+    "PlayerListMixin",
+    "ServerGamePacketListenerMixin"
+  ],
+  "client": [
+    "client.PlayerTabOverlayMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
