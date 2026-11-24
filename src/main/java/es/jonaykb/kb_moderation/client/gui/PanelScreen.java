@@ -34,8 +34,6 @@ public final class PanelScreen extends Screen {
     private double listScroll;
     private double reportScroll;
     private final long openedAt = System.currentTimeMillis();
-    private int ticks;
-    private int refreshIn = -1;
 
     private int left, top, w, h;
 
@@ -81,7 +79,25 @@ public final class PanelScreen extends Screen {
             searchText = s;
             listScroll = 0;
         });
+        // Created once, like the search box: rebuild() re-adds the same box, so it keeps its focus and text when an update arrives.
+        chatBox = new EditBox(font, left + 12, top + h - 21, w - 98, 12, Component.literal("Mensaje"));
+        chatBox.setBordered(false);
+        chatBox.setMaxLength(256);
+        chatBox.setHint(Component.literal("Escribe al staff… (Enter para enviar)").withStyle(st -> st.withColor(Theme.FAINT)));
+        chatBox.setValue(chatText);
+        chatBox.setResponder(v -> chatText = v);
         rebuild();
+    }
+
+    /** Shown (also when coming back from a sanction or history screen): the server sends the panel and then every change. */
+    @Override
+    public void added() {
+        if (Minecraft.getInstance().getConnection() != null) Net.CHANNEL.sendToServer(new Packets.RequestPanel());
+    }
+
+    @Override
+    public void removed() {
+        if (Minecraft.getInstance().getConnection() != null) Net.CHANNEL.sendToServer(new Packets.ClosePanel());
     }
 
     private void rebuild() {
@@ -157,12 +173,6 @@ public final class PanelScreen extends Screen {
 
     private void addChatWidgets() {
         int y = top + h - 26;
-        chatBox = new EditBox(font, left + 12, y + 5, w - 98, 12, Component.literal("Mensaje"));
-        chatBox.setBordered(false);
-        chatBox.setMaxLength(256);
-        chatBox.setHint(Component.literal("Escribe al staff… (Enter para enviar)").withStyle(st -> st.withColor(Theme.FAINT)));
-        chatBox.setValue(chatText);
-        chatBox.setResponder(v -> chatText = v);
         addRenderableWidget(chatBox);
         addRenderableWidget(new FlatButton(left + w - 80, y + 1, 72, 20, "Enviar", Theme.PINK, new ItemStack(Items.WRITABLE_BOOK),
                 b -> sendChat()).enabled(ClientState.has(Perm.STAFFCHAT)));
@@ -172,8 +182,7 @@ public final class PanelScreen extends Screen {
         String text = chatText.trim();
         if (text.isEmpty()) return;
         Net.CHANNEL.sendToServer(new Packets.SendStaffChat(text));
-        chatText = "";
-        if (chatBox != null) chatBox.setValue("");
+        chatBox.setValue("");
         chatScroll = 0;
         Sounds.select();
     }
@@ -291,11 +300,6 @@ public final class PanelScreen extends Screen {
         run(command);
         Sounds.confirm();
         minecraft.getToasts().addToast(new ModToast(3, "Hecho", feedback));
-        refreshSoon();
-    }
-
-    public void refreshSoon() {
-        refreshIn = 6;
     }
 
     static void run(String command) {
@@ -429,13 +433,11 @@ public final class PanelScreen extends Screen {
     @Override
     public void tick() {
         search.tick();
-        if (chatBox != null) chatBox.tick();
-        if (focusChat && chatBox != null && tab == 2) {
+        chatBox.tick();
+        if (focusChat && tab == 2) {
             focusChat = false;
             setFocused(chatBox);
         }
-        if (++ticks % 40 == 0) Net.CHANNEL.sendToServer(new Packets.RequestPanel());
-        if (refreshIn > 0 && --refreshIn == 0) Net.CHANNEL.sendToServer(new Packets.RequestPanel());
     }
 
     @Override

@@ -101,7 +101,6 @@ public final class HistoryScreen extends Screen {
 
     @Override
     public void onClose() {
-        if (parent instanceof PanelScreen p) p.refreshSoon();
         minecraft.setScreen(parent);
     }
 

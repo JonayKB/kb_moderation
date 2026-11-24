@@ -113,7 +113,8 @@ public final class ModConfig {
                 .define("url", "");
         BOT_API_KEY = b.comment("This server's API key in the bot panel (Servers → statistics). Empty = KB Discord Auth's stats.apiKey.")
                 .define("apiKey", "");
-        BOT_POLL_SECONDS = b.comment("How often to ask the bot for sanctions made in Discord or in its panel.")
+        BOT_POLL_SECONDS = b.comment("Changes made in Discord or in the bot panel arrive at once through a WebSocket. Only while it is down",
+                        "(bot restarting, or a bot version without it), the server asks the bot this often instead.")
                 .defineInRange("pollSeconds", 5, 2, 300);
         b.pop();
 

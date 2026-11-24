@@ -191,12 +191,23 @@ public final class Packets {
 
     // ───────────────────────────── client → server ─────────────────────────────
 
+    /** The panel is open: send it now and then every change while it stays open. */
     public record RequestPanel() {
         public void write(FriendlyByteBuf b) {
         }
 
         public static RequestPanel read(FriendlyByteBuf b) {
             return new RequestPanel();
+        }
+    }
+
+    /** The panel was closed (or left for a sanction or history screen): stop sending it changes. */
+    public record ClosePanel() {
+        public void write(FriendlyByteBuf b) {
+        }
+
+        public static ClosePanel read(FriendlyByteBuf b) {
+            return new ClosePanel();
         }
     }
 
